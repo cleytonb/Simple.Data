@@ -93,12 +93,20 @@ namespace Simple.Data
             return lambda;
         }
 
-        private static bool PropertyIsConvertible(PropertyInfo property)
+        internal static bool PropertyIsConvertible(PropertyInfo property)
         {
             return property.CanWrite || property.PropertyType.IsGenericCollection();
         }
 
-        private static BinaryExpression CreateNew(Type targetType, ParameterExpression obj)
+        internal static BinaryExpression CreateNew(Type targetType, ParameterExpression obj)
+        {
+            var ctor = targetType.GetConstructor(Type.EmptyTypes);
+            Debug.Assert(ctor != null);
+            var create = Expression.Assign(obj, Expression.New(ctor)); // obj = new T();
+            return create;
+        }
+
+        internal static BinaryExpression CreateNew(Type targetType, MemberExpression obj)
         {
             var ctor = targetType.GetConstructor(Type.EmptyTypes);
             Debug.Assert(ctor != null);

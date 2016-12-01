@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.CompilerServices;
 
 namespace Simple.Data
 {
@@ -35,20 +36,22 @@ namespace Simple.Data
         private MemberExpression _nameProperty;
         private IndexExpression _itemProperty;
         private MethodCallExpression _containsKey;
+        private string _prefix;
         private static readonly MethodInfo CreatorCreateMethod = typeof(ConcreteTypeCreator).GetMethod("Create");
 
-        public PropertySetterBuilder(ParameterExpression param, ParameterExpression obj, PropertyInfo property)
+        public PropertySetterBuilder(ParameterExpression param, ParameterExpression obj, PropertyInfo property, string prefix = "")
         {
             _param = param;
             _obj = obj;
             _property = property;
+            _prefix = prefix;
         }
 
         public ConditionalExpression CreatePropertySetter()
         {
             CreatePropertyExpressions();
 
-            if (PropertyIsPrimitive())
+            if (PropertyIsPrimitive() || PropertyIsDynamic())
             {
                 return Expression.IfThen(_containsKey, CreateTrySimpleAssign());
             }
@@ -72,8 +75,17 @@ namespace Simple.Data
             var tryComplexAssign = Expression.TryCatch(CreateComplexAssign(),
                                                        CreateCatchBlock());
 
-            var ifThen = Expression.IfThen(_containsKey, // if (dict.ContainsKey(propertyName)) {
-                                           Expression.IfThenElse(isDictionary, tryComplexAssign, CreateTrySimpleAssign()));
+            ConditionalExpression ifThen;
+            if (_obj.Type != _property.PropertyType)
+            {
+                ifThen = Expression.IfThenElse(_containsKey, // if (dict.ContainsKey(propertyName)) {
+                    Expression.IfThenElse(isDictionary, tryComplexAssign, CreateTrySimpleAssign()), Iterate());
+            }
+            else
+            {
+                ifThen = Expression.IfThen(_containsKey, // if (dict.ContainsKey(propertyName)) {
+                    Expression.IfThenElse(isDictionary, tryComplexAssign, CreateTrySimpleAssign()));
+            }
 
             return ifThen;
         }
@@ -263,11 +275,38 @@ namespace Simple.Data
                    (_property.PropertyType.IsGenericType && _property.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>));
         }
 
+        private bool PropertyIsDynamic()
+        {
+            return _property.PropertyType == typeof(object) &&
+                   _property.GetCustomAttributes(typeof(DynamicAttribute), false).Length > 0;
+        }
+
         private void CreatePropertyExpressions()
         {
-            var name = Expression.Constant(_property.Name, typeof(string));
+            var name = Expression.Constant(string.IsNullOrEmpty(_prefix) ? _property.Name : _prefix + "." + _property.Name, typeof(string));
             _containsKey = Expression.Call(_param, DictionaryContainsKeyMethod, name);
-            _nameProperty = Expression.Property(_obj, _property);
+            if (string.IsNullOrEmpty(_prefix))
+            {
+                _nameProperty = Expression.Property(_obj, _property);
+            }
+            else
+            {
+                var prefixes = _prefix.Split(new[] { "." }, StringSplitOptions.RemoveEmptyEntries);
+                MemberExpression temp = null;
+                for (int i = 0; i < prefixes.Length; i++)
+                {
+                    var prefix = prefixes[i];
+                    if (i == 0)
+                    {
+                        temp = Expression.Property(_obj, prefix);
+                    }
+                    else
+                    {
+                        temp = Expression.Property(temp, prefix);
+                    }
+                }
+                _nameProperty = Expression.Property(temp, _property);
+            }
             _itemProperty = Expression.Property(_param, DictionaryIndexerProperty, name);
         }
 
@@ -275,6 +314,21 @@ namespace Simple.Data
         {
             return Expression.Catch(typeof(Exception), Expression.Assign(_nameProperty,
                                                                          Expression.Default(_property.PropertyType)));
+        }
+
+        private BlockExpression Iterate()
+        {
+            var create = ConcreteTypeCreator.CreateNew(_property.PropertyType, _nameProperty);
+            var name = string.IsNullOrEmpty(_prefix) ? _property.Name : _prefix + "." + _property.Name;
+
+            var assignments = Expression.Block(
+                _property.PropertyType.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                    .Where(ConcreteTypeCreator.PropertyIsConvertible)
+                    .Select(p => new PropertySetterBuilder(_param, _obj, p, name).CreatePropertySetter()));
+            var block = Expression.Block(create,
+                                         assignments,
+                                         _obj);
+            return block;
         }
 
         private BinaryExpression CreateComplexAssign()

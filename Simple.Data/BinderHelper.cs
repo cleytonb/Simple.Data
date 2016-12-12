@@ -25,11 +25,10 @@ namespace Simple.Data
             if (argsArray.Length == 1 && argsArray[0] is IDictionary<string, object>)
                 return (IDictionary<string, object>)argsArray[0];
 
-            var type = argsArray[0].GetType();
-            if (argsArray.Length == 1 && type.IsClass)
+            if (argsArray.Length == 1 && argsArray[0] != null && argsArray[0].GetType().IsClass)
             {
                 var dict = new Dictionary<string, object>();
-                var props = type.GetProperties();
+                var props = argsArray[0].GetType().GetProperties();
                 foreach (var prop in props)
                 {
                     try
